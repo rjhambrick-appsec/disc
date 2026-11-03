@@ -1,6 +1,7 @@
 """A simple desktop form for recording a disc golf inventory."""
 
 import csv
+import unicodedata
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 import tkinter as tk
@@ -27,10 +28,32 @@ class Disc:
 
 
 FIELD_NAMES = [field.name for field in fields(Disc)]
+TEXT_FIELDS = ("name", "manufacturer", "material", "color", "comment")
+
+
+def validate_text(field_name: str, value: str) -> None:
+    """Allow letters, numbers, ordinary spaces, and limited punctuation."""
+    for character in value:
+        if character == "\n" and field_name == "comment":
+            continue
+        if not (
+            unicodedata.category(character).startswith(("L", "N"))
+            or character in " .,-_"
+        ):
+            raise ValueError(
+                f"{field_name.capitalize()} contains a blocked character: {character!r}. "
+                "Use letters, numbers, spaces, periods, commas, hyphens, or underscores."
+                + (" Line breaks are also allowed in comments." if field_name == "comment" else "")
+            )
+    # A leading minus can be interpreted as a formula by spreadsheet programs.
+    if value.lstrip().startswith("-"):
+        raise ValueError(f"{field_name.capitalize()} must not start with a hyphen.")
 
 
 def save_disc(disc: Disc, path: Path = CSV_PATH) -> None:
     """Append a record, adding the column headings to a new or empty file."""
+    for field_name in TEXT_FIELDS:
+        validate_text(field_name, getattr(disc, field_name))
     needs_header = not path.exists() or path.stat().st_size == 0
     if not needs_header:
         with path.open("r", newline="", encoding="utf-8") as file:
@@ -103,7 +126,15 @@ class InventoryApp:
         self.name_entry.focus_set()
 
     def save(self) -> None:
-        data = {key: variable.get().strip() for key, variable in self.values.items()}
+        data = {key: variable.get() for key, variable in self.values.items()}
+        comment = self.comment.get("1.0", "end-1c")
+        try:
+            for key in TEXT_FIELDS:
+                validate_text(key, comment if key == "comment" else data[key])
+        except ValueError as error:
+            messagebox.showerror("Invalid text", str(error), parent=self.root)
+            return
+        data = {key: value.strip() for key, value in data.items()}
         for key, value in data.items():
             if not value:
                 messagebox.showerror("Missing value", f"Please enter {key}.", parent=self.root)
@@ -121,7 +152,7 @@ class InventoryApp:
             import math
             if not math.isfinite(data["rating"]):
                 raise ValueError("Rating must be a finite number.")
-            disc = Disc(**data, in_bag=self.in_bag.get(), comment=self.comment.get("1.0", "end-1c").strip())
+            disc = Disc(**data, in_bag=self.in_bag.get(), comment=comment.strip())
             save_disc(disc)
         except (ValueError, OSError, csv.Error) as error:
             messagebox.showerror("Unable to save disc", str(error), parent=self.root)
